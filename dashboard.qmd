@@ -1,0 +1,241 @@
+---
+title: "Palmer Penguins Dashboard: Descriptive and Inferential Statistics"
+format: dashboard
+jupyter: python3
+---
+
+```{python}
+#| label: setup
+#| include: false
+import numpy as np
+import pandas as pd
+from scipy import stats
+from palmerpenguins import load_penguins
+from plotnine import (ggplot, aes, geom_bar, geom_boxplot, geom_histogram,
+                      geom_point, geom_abline, labs, theme_minimal, theme,
+                      element_text, scale_fill_manual, scale_color_manual)
+
+# ---------- Data ----------
+penguins = load_penguins()
+penguins["species"] = penguins["species"].astype(str)
+penguins["island"] = penguins["island"].astype(str)
+
+clean = penguins.dropna(subset=["body_mass_g", "flipper_length_mm"]).copy()
+sexdf = penguins.dropna(subset=["sex", "body_mass_g"]).copy()
+sexdf["sex"] = sexdf["sex"].astype(str).str.lower()
+
+colors = {"Adelie": "#FF8C00", "Chinstrap": "#7B2CBF", "Gentoo": "#1F77B4"}
+base_theme = theme_minimal() + theme(
+    plot_title=element_text(size=12, weight="bold"),
+    figure_size=(6, 3.6),
+)
+
+def p_text(p):
+    return "p < 0.001" if p < 0.001 else f"p = {p:.3f}"
+
+def fmt_p(p):
+    return "< 0.001" if p < 0.001 else f"{p:.3f}"
+
+def decide(p):
+    return "Reject H0 (significant)" if p < 0.05 else "Fail to reject H0"
+
+# ---------- Descriptive statistics ----------
+desc = (clean.groupby("species")["body_mass_g"]
+        .agg(n="count", mean="mean", sd="std", median="median",
+             min="min", max="max"))
+tcrit = stats.t.ppf(0.975, desc["n"] - 1)
+margin = tcrit * desc["sd"] / np.sqrt(desc["n"])
+desc["ci_low"] = desc["mean"] - margin
+desc["ci_high"] = desc["mean"] + margin
+desc = desc.round(1)
+desc["n"] = desc["n"].astype(int)
+desc.columns = ["n", "Mean", "SD", "Median", "Min", "Max",
+                "95% CI low", "95% CI high"]
+
+heavy = desc["Mean"].idxmax()
+light = desc["Mean"].idxmin()
+
+mass = clean["body_mass_g"]
+mean_all, median_all, sd_all = mass.mean(), mass.median(), mass.std()
+skew_all = stats.skew(mass)
+
+# ---------- Inferential statistics ----------
+# 1) One-way ANOVA: body mass by species
+groups = [x["body_mass_g"].values for _, x in clean.groupby("species")]
+f_stat, p_anova = stats.f_oneway(*groups)
+df_b, df_w = len(groups) - 1, len(clean) - len(groups)
+ss_between = sum(len(x) * (x.mean() - mean_all) ** 2 for x in groups)
+ss_total = ((mass - mean_all) ** 2).sum()
+eta2 = ss_between / ss_total
+
+# 2) Chi-square test of independence: species x island
+ct = pd.crosstab(penguins["species"], penguins["island"])
+chi2, p_chi, dof, _ = stats.chi2_contingency(ct)
+cramers_v = np.sqrt(chi2 / (ct.values.sum() * (min(ct.shape) - 1)))
+
+# 3) Pearson correlation + simple regression: flipper length vs body mass
+r, p_r = stats.pearsonr(clean["flipper_length_mm"], clean["body_mass_g"])
+lr = stats.linregress(clean["flipper_length_mm"], clean["body_mass_g"])
+
+# 4) Welch two-sample t-test: body mass, male vs female
+male = sexdf.loc[sexdf["sex"] == "male", "body_mass_g"]
+female = sexdf.loc[sexdf["sex"] == "female", "body_mass_g"]
+t_stat, p_t = stats.ttest_ind(male, female, equal_var=False)
+pooled_sd = np.sqrt((male.var(ddof=1) + female.var(ddof=1)) / 2)
+cohen_d = (male.mean() - female.mean()) / pooled_sd
+
+tests = pd.DataFrame({
+    "Test": ["One-way ANOVA", "Chi-square independence",
+             "Pearson correlation", "Welch t-test"],
+    "Question": ["Does mean body mass differ by species?",
+                 "Are species and island associated?",
+                 "Are flipper length and body mass related?",
+                 "Does mean body mass differ by sex?"],
+    "Statistic": [f"F({df_b}, {df_w}) = {f_stat:.1f}",
+                  f"chi2({dof}) = {chi2:.1f}",
+                  f"r = {r:.3f}",
+                  f"t = {t_stat:.2f}"],
+    "p-value": [fmt_p(p_anova), fmt_p(p_chi), fmt_p(p_r), fmt_p(p_t)],
+    "Decision (alpha = 0.05)": [decide(p_anova), decide(p_chi),
+                                decide(p_r), decide(p_t)],
+}).set_index("Test")
+```
+
+## Row {height=14%}
+
+```{python}
+#| content: valuebox
+#| title: "Penguins Analyzed"
+dict(icon="bar-chart", color="#7B2CBF", value=f"{len(clean)}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "Mean Body Mass (g)"
+dict(icon="speedometer2", color="#1F77B4", value=f"{mean_all:,.0f}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "ANOVA: Mass by Species"
+dict(icon="graph-up", color="#FF8C00", value=p_text(p_anova))
+```
+
+```{python}
+#| content: valuebox
+#| title: "Flipper-Mass Correlation"
+dict(icon="arrow-up-right", color="#7B2CBF", value=f"r = {r:.2f}")
+```
+
+```{python}
+#| content: valuebox
+#| title: "Species-Island Association"
+dict(icon="geo-alt", color="#1F77B4", value=f"V = {cramers_v:.2f}")
+```
+
+## Row {height=28%}
+
+### Descriptive Statistics: Body Mass (g) by Species {width=55%}
+
+```{python}
+desc
+```
+
+```{python}
+#| output: asis
+print(f"**Interpretation:** {heavy} penguins are the heaviest on average ({desc.loc[heavy, 'Mean']:,.0f} g) and {light} are the lightest ({desc.loc[light, 'Mean']:,.0f} g). The 95% confidence intervals show how precisely each species mean is estimated: narrower intervals mean more precise estimates.")
+```
+
+### Distribution of Body Mass
+
+```{python}
+(
+    ggplot(clean, aes(x="body_mass_g", fill="species"))
+    + geom_histogram(bins=25, alpha=0.85)
+    + scale_fill_manual(values=colors)
+    + labs(title="Distribution of Body Mass", x="Body mass (g)",
+           y="Number of penguins", fill="Species")
+    + base_theme
+)
+```
+
+```{python}
+#| output: asis
+print(f"**Interpretation:** Body mass has a mean of {mean_all:,.0f} g, a median of {median_all:,.0f} g, and a standard deviation of {sd_all:,.0f} g (skewness = {skew_all:.2f}). Because the species differ in size, the histogram combines several overlapping groups instead of one bell curve.")
+```
+
+## Row {height=29%}
+
+### Body Mass by Species (ANOVA and t-test)
+
+```{python}
+(
+    ggplot(clean, aes(x="species", y="body_mass_g", fill="species"))
+    + geom_boxplot(alpha=0.85)
+    + scale_fill_manual(values=colors)
+    + labs(title="Body Mass by Species", x="Species",
+           y="Body mass (g)", fill="Species")
+    + base_theme
+)
+```
+
+```{python}
+#| output: asis
+sig = "a significant" if p_anova < 0.05 else "no significant"
+sex_sig = "significantly heavier" if (p_t < 0.05 and male.mean() > female.mean()) else ("significantly lighter" if p_t < 0.05 else "not significantly different in mass from")
+print(f"**Interpretation:** A one-way ANOVA shows {sig} difference in mean body mass among species (F({df_b}, {df_w}) = {f_stat:.1f}, {p_text(p_anova)}). Species explains {eta2*100:.1f}% of the variation in body mass (eta-squared = {eta2:.2f}). A Welch t-test finds males ({male.mean():,.0f} g) {sex_sig} females ({female.mean():,.0f} g), {p_text(p_t)}, Cohen's d = {cohen_d:.2f}.")
+```
+
+### Flipper Length vs Body Mass (Correlation and Regression)
+
+```{python}
+(
+    ggplot(clean, aes(x="flipper_length_mm", y="body_mass_g"))
+    + geom_point(aes(color="species"), alpha=0.8)
+    + geom_abline(intercept=lr.intercept, slope=lr.slope, color="black")
+    + scale_color_manual(values=colors)
+    + labs(title="Flipper Length vs Body Mass", x="Flipper length (mm)",
+           y="Body mass (g)", color="Species")
+    + base_theme
+)
+```
+
+```{python}
+#| output: asis
+direction = "positive" if r > 0 else "negative"
+print(f"**Interpretation:** There is a {direction} correlation between flipper length and body mass (r = {r:.2f}, {p_text(p_r)}). The regression line (black) suggests each extra millimeter of flipper length is associated with about {lr.slope:,.1f} g more body mass, and flipper length explains {r**2*100:.0f}% of the variation in body mass.")
+```
+
+## Row {height=29%}
+
+### Species Across Islands (Chi-square Test)
+
+```{python}
+(
+    ggplot(penguins, aes(x="island", fill="species"))
+    + geom_bar()
+    + scale_fill_manual(values=colors)
+    + labs(title="Penguin Counts by Island and Species", x="Island",
+           y="Number of penguins", fill="Species")
+    + base_theme
+)
+```
+
+```{python}
+#| output: asis
+top_island = penguins["island"].value_counts().idxmax()
+top_species = penguins["species"].value_counts().idxmax()
+assoc = "are associated" if p_chi < 0.05 else "are not significantly associated"
+print(f"**Interpretation:** {top_island} has the most penguins ({(penguins['island'] == top_island).sum()}), and {top_species} is the most observed species ({(penguins['species'] == top_species).sum()}). A chi-square test of independence shows species and island {assoc} (chi-square({dof}) = {chi2:.1f}, {p_text(p_chi)}, Cramer's V = {cramers_v:.2f}), meaning species are not spread evenly across the islands.")
+```
+
+### Summary of Hypothesis Tests {width=45%}
+
+```{python}
+tests
+```
+
+```{python}
+#| output: asis
+print("**Note:** All tests use a 5% significance level (alpha = 0.05). H0 is the null hypothesis of no difference or no association. ANOVA assumes roughly normal groups with similar spread, and the chi-square test assumes independent observations.")
+```
