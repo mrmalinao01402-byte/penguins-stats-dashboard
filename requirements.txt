@@ -1,0 +1,10 @@
+pandas
+numpy
+scipy
+palmerpenguins
+plotnine
+jupyter
+nbformat
+nbclient
+ipykernel
+pyyaml
